@@ -1,3 +1,8 @@
 *.zip
 DEV/
 *.pkl
+
+# everything in data dir
+data/
+.idea/
+__pycache__/
