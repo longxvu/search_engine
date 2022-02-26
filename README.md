@@ -2,7 +2,7 @@
 Run these commands in order:
 ```shell
 pip install -r packages/requirements.txt
-python nltk_requirement_installation.py
+python packages/nltk_requirement_installation.py
 ```
 
 ## Write indexer to file
