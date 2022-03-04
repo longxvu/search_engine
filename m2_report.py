@@ -13,9 +13,14 @@ indexer.load_inverted_index(args.inverted_index_file)
 indexer.load_doc_id_map(args.doc_id_file)
 
 # Retrieve
-queries = ["cristina lopes", "machine learning", "ACM", "master of software engineering"]
+queries = [
+    "cristina lopes",
+    "machine learning",
+    "ACM",
+    "master of software engineering",
+]
 
-for query in queries:
+for query in queries[:1]:
     start = time.time()
     results = indexer.retrieve(query, top_k=5)
     for result in results:

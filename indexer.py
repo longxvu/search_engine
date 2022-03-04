@@ -1,3 +1,4 @@
+from audioop import reverse
 import nltk
 from nltk.stem.snowball import EnglishStemmer
 from argparse import ArgumentParser
@@ -6,10 +7,13 @@ import os
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 import json
+from typing import List
+import math
 
 
 class Indexer:
-    """ NLTK-based inverted indexer"""
+    """NLTK-based inverted indexer"""
+
     def __init__(self, use_stemmer=False):
         self.tokenizer = nltk.word_tokenize  # sentence tokenization models
         self.stemmer = None
@@ -46,10 +50,16 @@ class Indexer:
                 self.inverted_index[token] = []
             # If current term is not calculated before -> add to list
             # self.inverted_index[token][-1] is last doc id for current term
-            if len(self.inverted_index[token]) == 0 or self.inverted_index[token][-1][0] != doc_id:
+            if (
+                len(self.inverted_index[token]) == 0
+                or self.inverted_index[token][-1][0] != doc_id
+            ):
                 self.inverted_index[token].append((doc_id, 1))
             else:
-                self.inverted_index[token][-1] = (doc_id, self.inverted_index[token][-1][1] + 1)
+                self.inverted_index[token][-1] = (
+                    doc_id,
+                    self.inverted_index[token][-1][1] + 1,
+                )
 
     # For consistency between inverted index processing and query processing
     def process_token(self, token: str):
@@ -71,7 +81,7 @@ class Indexer:
         return processed_query
 
     # boolean retrieval model:
-    def boolean_retrieval(self, processed_query: list[str]):
+    def boolean_retrieval(self, processed_query: List[str]):
         doc_id_lst = []
         term_doc_id_lst = []
         for token in processed_query:
@@ -83,27 +93,47 @@ class Indexer:
         # sort query based on length
         term_doc_id_lst = sorted(term_doc_id_lst, key=lambda x: len(x))
         pointer_lst = [0 for _ in range(len(term_doc_id_lst))]  # list for skip pointer
-
-        for current_doc_id, term_freq in term_doc_id_lst[0]:  # Process term with the lowest amount of doc id
+        N = len(self.doc_id_url_map)
+        for current_doc_id, term_freq in term_doc_id_lst[
+            0
+        ]:  # Process term with the lowest amount of doc id
             same_doc_id = True
             for term_idx in range(1, len(term_doc_id_lst)):
                 # Two condition: Pointer to doc doesn't go out of bound, and other doc id < current doc id
-                other_doc_id = -1  # Setting this to -1 in case the first condition fails
-                while pointer_lst[term_idx] < len(term_doc_id_lst[term_idx]) and \
-                        (other_doc_id := term_doc_id_lst[term_idx][pointer_lst[term_idx]][0]) < current_doc_id:
+                other_doc_id = (
+                    -1
+                )  # Setting this to -1 in case the first condition fails
+                while (
+                    pointer_lst[term_idx] < len(term_doc_id_lst[term_idx])
+                    and (
+                        other_doc_id := term_doc_id_lst[term_idx][
+                            pointer_lst[term_idx]
+                        ][0]
+                    )
+                    < current_doc_id
+                ):
                     pointer_lst[term_idx] += 1
-                if other_doc_id != current_doc_id:  # If other term doesn't include the current doc id we can skip this doc
+                if (
+                    other_doc_id != current_doc_id
+                ):  # If other term doesn't include the current doc id we can skip this doc
                     same_doc_id = False
                     break
             if same_doc_id:
-                # Weight documents by total term frequency for now
+                # term frequency, inverse document frequency
+                tfidf = 0
+                for token_idx in range(len(term_doc_id_lst)):
+                    token_tf = 1 + math.log10(
+                        term_doc_id_lst[token_idx][pointer_lst[token_idx]][1]
+                    )
+                    token_idf = math.log10(N / len(term_doc_id_lst[token_idx]))
+                    tfidf += token_tf * token_idf
                 # for term_idx, doc_ptr in enumerate(pointer_lst):
                 #     total_freq += (1 / len(processed_query)) * term_doc_id_lst[term_idx][pointer_lst[term_idx]][1]
-                doc_id_lst.append(current_doc_id)
+                doc_id_lst.append((current_doc_id, tfidf))
             pointer_lst[0] += 1  # increment pointer for first list also
-
+        doc_id_lst = sorted(doc_id_lst, key=lambda x: x[1], reverse=True)
+        doc_id_lst = [x[0] for x in doc_id_lst]
         return doc_id_lst
-
 
     def retrieve(self, query, top_k=5):
         processed_query = self.process_query(query)
@@ -135,7 +165,11 @@ def create_indexer(data_path, use_stemmer=False):
 
     indexer = Indexer(use_stemmer)  # For now let's not use stemmer
     for directory in tqdm(os.listdir(data_path), desc="Whole dataset progress"):
-        for file in tqdm(os.listdir(os.path.join(data_path, directory)), leave=False, desc=f"Processing {directory}"):
+        for file in tqdm(
+            os.listdir(os.path.join(data_path, directory)),
+            leave=False,
+            desc=f"Processing {directory}",
+        ):
             file_path = os.path.join(data_path, directory, file)
             with open(file_path) as f:
                 content = json.load(f)
@@ -149,7 +183,9 @@ def create_indexer(data_path, use_stemmer=False):
 
 if __name__ == "__main__":
     parser = ArgumentParser()
-    parser.add_argument("--data", type=str, default="data/ANALYST", help="Path to web data")
+    parser.add_argument(
+        "--data", type=str, default="data/ANALYST", help="Path to web data"
+    )
     args = parser.parse_args()
 
     index_db = create_indexer(args.data)
