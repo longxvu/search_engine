@@ -20,14 +20,26 @@ Assuming data has this structure:
 ```
 ```shell
 # default for analyst dataset (for faster testing)
-python run.py
+python indexer.py
 
 # for dev dataset, can change data argument to any path
-python run.py --data data/DEV
+python indexer.py --data data/DEV
+```
+
+## Simple terminal search engine
+Assuming inverted index and doc id map is obtained
+```shell
+python run.py
 ```
 
 ## Milestone 1 report
 Get milestone 1 report after obtaining doc_id.pkl and inverted_index.pkl
 ```shell
 python m1_report.py
+```
+
+## Milestone 2 report
+Assuming inverted index and doc id map is obtained
+```shell
+python m2_report.py
 ```

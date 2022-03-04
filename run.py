@@ -1,24 +1,29 @@
 from argparse import ArgumentParser
-import json
-import os
-from bs4 import BeautifulSoup
-from indexer import Indexer, create_indexer
-from tqdm import tqdm
+from indexer import Indexer
+import time
 
 
 parser = ArgumentParser()
-parser.add_argument("--data", type=str, default="data/ANALYST", help="Path to web data")
+parser.add_argument("--inverted_index_file", default="inverted_index.pkl")
+parser.add_argument("--doc_id_file", default="doc_id.pkl")
 
 arguments = parser.parse_args()
 
 def run(args):
-    # Create indexer in memory
-    indexer = create_indexer(args.data)
-    # Hardcode name for now
-    print("Saving doc_id map")
-    indexer.dump_doc_id_map("doc_id.pkl")
-    print("Saving inverted index")
-    indexer.dump_inverted_index("inverted_index.pkl")
+    indexer = Indexer()
+    indexer.load_inverted_index(args.inverted_index_file)
+    indexer.load_doc_id_map(args.doc_id_file)
+
+    while True:
+        input_query = input("Enter your search query: ")
+        start = time.time()
+        results = indexer.retrieve(input_query, top_k=5)
+        end = time.time()
+        print(f'Results for "{input_query}":')
+        for result in results:
+            print(result)
+        print(f"Retrieval took {(end - start):.3f}s")
+        print()
 
 if __name__ == "__main__":
     run(arguments)

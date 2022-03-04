@@ -1,6 +1,6 @@
 import nltk
 from nltk.stem.snowball import EnglishStemmer
-from nltk.corpus import stopwords
+from argparse import ArgumentParser
 import pickle
 import os
 from bs4 import BeautifulSoup
@@ -10,15 +10,11 @@ import json
 
 class Indexer:
     """ NLTK-based inverted indexer"""
-    def __init__(self, use_stemmer=True, ignore_stopwords=False):
+    def __init__(self, use_stemmer=False):
         self.tokenizer = nltk.word_tokenize  # sentence tokenization models
         self.stemmer = None
-        self.stopwords = None
         if use_stemmer:
             self.stemmer = EnglishStemmer()  # slightly better than Porter stemmer
-
-        if ignore_stopwords:
-            self.stopwords = stopwords.words("english")
 
         # Map between document ID and its URL
         self.doc_id_url_map = {}
@@ -42,14 +38,10 @@ class Indexer:
             self.url_doc_id_map[url] = doc_id
             self.__current_id += 1
 
-        for token in [t.lower() for t in self.tokenizer(document)]:
-            if self.stopwords and token in self.stopwords:
+        for token in self.tokenizer(document):
+            token = self.process_token(token)
+            if not token:
                 continue
-            if len(token) == 1 and not token.isalnum():  # Removing separator
-                continue
-            if self.stemmer:
-                token = self.stemmer.stem(token)
-
             if token not in self.inverted_index:
                 self.inverted_index[token] = []
             # If current term is not calculated before -> add to list
@@ -58,6 +50,68 @@ class Indexer:
                 self.inverted_index[token].append((doc_id, 1))
             else:
                 self.inverted_index[token][-1] = (doc_id, self.inverted_index[token][-1][1] + 1)
+
+    # For consistency between inverted index processing and query processing
+    def process_token(self, token: str):
+        if len(token) == 1 and not token.isalnum():  # Removing separator
+            return None
+        token = token.lower()
+        if self.stemmer:
+            token = self.stemmer.stem(token)
+
+        return token
+
+    # Query processing
+    def process_query(self, query: str):
+        processed_query = []
+        for token in self.tokenizer(query):
+            token = self.process_token(token)
+            if token:
+                processed_query.append(token)
+        return processed_query
+
+    # boolean retrieval model:
+    def boolean_retrieval(self, processed_query: list[str]):
+        doc_id_lst = []
+        term_doc_id_lst = []
+        for token in processed_query:
+            # TODO: What if token is not in our index?
+            # term_doc_id_lst.append([item[0] for item in self.inverted_index[token]])
+            term_doc_id_lst.append(self.inverted_index[token])
+
+        # If memory is an issue can move the whole part below to process in the for loop above
+        # sort query based on length
+        term_doc_id_lst = sorted(term_doc_id_lst, key=lambda x: len(x))
+        pointer_lst = [0 for _ in range(len(term_doc_id_lst))]  # list for skip pointer
+
+        for current_doc_id, term_freq in term_doc_id_lst[0]:  # Process term with the lowest amount of doc id
+            same_doc_id = True
+            for term_idx in range(1, len(term_doc_id_lst)):
+                # Two condition: Pointer to doc doesn't go out of bound, and other doc id < current doc id
+                other_doc_id = -1  # Setting this to -1 in case the first condition fails
+                while pointer_lst[term_idx] < len(term_doc_id_lst[term_idx]) and \
+                        (other_doc_id := term_doc_id_lst[term_idx][pointer_lst[term_idx]][0]) < current_doc_id:
+                    pointer_lst[term_idx] += 1
+                if other_doc_id != current_doc_id:  # If other term doesn't include the current doc id we can skip this doc
+                    same_doc_id = False
+                    break
+            if same_doc_id:
+                # Weight documents by total term frequency for now
+                # for term_idx, doc_ptr in enumerate(pointer_lst):
+                #     total_freq += (1 / len(processed_query)) * term_doc_id_lst[term_idx][pointer_lst[term_idx]][1]
+                doc_id_lst.append(current_doc_id)
+            pointer_lst[0] += 1  # increment pointer for first list also
+
+        return doc_id_lst
+
+
+    def retrieve(self, query, top_k=5):
+        processed_query = self.process_query(query)
+        print(processed_query)
+        doc_ids = self.boolean_retrieval(processed_query)
+        # results = sorted(results, key=lambda x: x[1], reverse=True)
+        results = [self.doc_id_url_map[doc_id] for doc_id in doc_ids]
+        return results[:top_k]
 
     def dump_inverted_index(self, path_to_dump):
         with open(path_to_dump, "wb") as f_out:
@@ -76,10 +130,10 @@ class Indexer:
             self.doc_id_url_map = pickle.load(f_in)
 
 
-def create_indexer(data_path):
+def create_indexer(data_path, use_stemmer=False):
     assert os.path.exists(data_path), "Input path does not exist"
 
-    indexer = Indexer(use_stemmer=False)  # For now let's not use stemmer
+    indexer = Indexer(use_stemmer)  # For now let's not use stemmer
     for directory in tqdm(os.listdir(data_path), desc="Whole dataset progress"):
         for file in tqdm(os.listdir(os.path.join(data_path, directory)), leave=False, desc=f"Processing {directory}"):
             file_path = os.path.join(data_path, directory, file)
@@ -91,3 +145,16 @@ def create_indexer(data_path):
             indexer.index_document(soup.text, content["url"])
 
     return indexer
+
+
+if __name__ == "__main__":
+    parser = ArgumentParser()
+    parser.add_argument("--data", type=str, default="data/ANALYST", help="Path to web data")
+    args = parser.parse_args()
+
+    index_db = create_indexer(args.data)
+    # Hardcode name for now
+    print("Saving doc_id map")
+    index_db.dump_doc_id_map("doc_id.pkl")
+    print("Saving inverted index")
+    index_db.dump_inverted_index("inverted_index.pkl")
