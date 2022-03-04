@@ -1,0 +1,26 @@
+<html>
+
+<body>
+    <h1>Simple Web Search Engine</h1>
+    <div id="main" class="test">
+        <form action="/search" method="post">
+            <label>What do you want to search:</label>
+            <input type="text" name="input" value="" />
+            <input type="submit" value="Submit">
+        </form>
+    </div>
+    <h1>Results:</h1>
+    <div>
+        {% for post in results %}
+
+        {{ post }}
+        <td>
+            <p>{{ post['rank'] }}</p><span class="date label label-default">{{ post['time']
+                }}</span>
+        </td>
+
+        {% endfor %}
+    </div>
+</body>
+
+</html>
