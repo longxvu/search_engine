@@ -9,6 +9,7 @@ from tqdm import tqdm
 import json
 from typing import List
 import math
+from stop_words import stopwords
 
 
 class Indexer:
@@ -68,7 +69,8 @@ class Indexer:
         token = token.lower()
         if self.stemmer:
             token = self.stemmer.stem(token)
-
+        # if token in stopwords: # uncomment to exclude stop words
+        #     return None
         return token
 
     # Query processing
