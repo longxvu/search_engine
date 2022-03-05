@@ -1,12 +1,17 @@
 import flask
-from argparse import ArgumentParser
 from indexer import Indexer
 import time
 from flask import Flask, render_template, request
-from m2_report import indexer
+from utils import parse_arguments
 
 app = flask.Flask(__name__)
 app.config["DEBUG"] = True
+
+args = parse_arguments()
+# Load indexer
+indexer = Indexer()
+indexer.load_inverted_index(args.inverted_index_file)
+indexer.load_doc_id_map(args.doc_id_file)
 
 
 @app.route("/", methods=["GET"])

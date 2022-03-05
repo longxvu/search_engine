@@ -1,4 +1,3 @@
-from audioop import reverse
 import nltk
 from nltk.stem.snowball import EnglishStemmer
 from argparse import ArgumentParser
@@ -9,7 +8,6 @@ from tqdm import tqdm
 import json
 from typing import List
 import math
-from stop_words import stopwords
 
 
 class Indexer:
@@ -96,15 +94,13 @@ class Indexer:
         term_doc_id_lst = sorted(term_doc_id_lst, key=lambda x: len(x))
         pointer_lst = [0 for _ in range(len(term_doc_id_lst))]  # list for skip pointer
         N = len(self.doc_id_url_map)
-        for current_doc_id, term_freq in term_doc_id_lst[
-            0
-        ]:  # Process term with the lowest amount of doc id
+        # Process term with the lowest amount of doc id
+        for current_doc_id, term_freq in term_doc_id_lst[0]:
             same_doc_id = True
             for term_idx in range(1, len(term_doc_id_lst)):
                 # Two condition: Pointer to doc doesn't go out of bound, and other doc id < current doc id
-                other_doc_id = (
-                    -1
-                )  # Setting this to -1 in case the first condition fails
+                # Also setting this to -1 in case the first condition fails
+                other_doc_id = -1
                 while (
                     pointer_lst[term_idx] < len(term_doc_id_lst[term_idx])
                     and (
