@@ -19,9 +19,9 @@ class Indexer:
         if use_stemmer:
             self.stemmer = EnglishStemmer()  # slightly better than Porter stemmer
 
-        # Map between document ID and its URL
+        # Map from document ID to its URL
         self.doc_id_url_map = {}
-        self.url_doc_id_map = {}
+        self.doc_id_disk_loc = {}
 
         # Map between terms and its posting.
         # Posting is currently a tuple (doc_id, term_freq)
@@ -30,16 +30,13 @@ class Indexer:
         self.__current_id = 0
 
     # If all URL are distinct we don't even need url_doc_id_map. Leaving it here for now
-    def index_document(self, document, url):
+    def index_document(self, document, url, disk_location):
         # Process docID mapping
-        if url in self.url_doc_id_map:
-            doc_id = self.url_doc_id_map[url]
-        else:
-            doc_id = self.__current_id
-            # Doc ID mapping
-            self.doc_id_url_map[doc_id] = url
-            self.url_doc_id_map[url] = doc_id
-            self.__current_id += 1
+        doc_id = self.__current_id
+        # Doc ID mapping
+        self.doc_id_url_map[doc_id] = url
+        self.doc_id_disk_loc[doc_id] = disk_location
+        self.__current_id += 1
 
         for token in self.tokenizer(document):
             token = self.process_token(token)
@@ -138,16 +135,21 @@ class Indexer:
         print(processed_query)
         doc_ids = self.boolean_retrieval(processed_query)
         # results = sorted(results, key=lambda x: x[1], reverse=True)
-        results = [self.doc_id_url_map[doc_id] for doc_id in doc_ids]
-        return results[:top_k]
+        doc_id_results = [self.doc_id_url_map[doc_id] for doc_id in doc_ids]
+        disk_loc_results = [self.doc_id_disk_loc[doc_id] for doc_id in doc_ids]
+        return doc_id_results[:top_k], disk_loc_results[:top_k]
 
     def dump_inverted_index(self, path_to_dump):
         with open(path_to_dump, "wb") as f_out:
             pickle.dump(self.inverted_index, f_out, pickle.HIGHEST_PROTOCOL)
 
     def dump_doc_id_map(self, path_to_dump):
+        doc_id_state = {
+            "url_map": self.doc_id_url_map,
+            "disk_loc": self.doc_id_disk_loc
+        }
         with open(path_to_dump, "wb") as f_out:
-            pickle.dump(self.doc_id_url_map, f_out, pickle.HIGHEST_PROTOCOL)
+            pickle.dump(doc_id_state, f_out, pickle.HIGHEST_PROTOCOL)
 
     def load_inverted_index(self, path_to_load):
         with open(path_to_load, "rb") as f_in:
@@ -155,7 +157,9 @@ class Indexer:
 
     def load_doc_id_map(self, path_to_load):
         with open(path_to_load, "rb") as f_in:
-            self.doc_id_url_map = pickle.load(f_in)
+            doc_id_state = pickle.load(f_in)
+        self.doc_id_url_map = doc_id_state["url_map"]
+        self.doc_id_disk_loc = doc_id_state["disk_loc"]
 
 
 def create_indexer(data_path, use_stemmer=False):
@@ -174,7 +178,7 @@ def create_indexer(data_path, use_stemmer=False):
 
             soup = BeautifulSoup(content["content"], "lxml")
             # TODO: Right now all text have equal weight. Need to change importance for title, h1, h2, etc.
-            indexer.index_document(soup.text, content["url"])
+            indexer.index_document(soup.text, content["url"], os.path.abspath(file_path))
 
     return indexer
 

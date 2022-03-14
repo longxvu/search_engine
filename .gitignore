@@ -6,3 +6,4 @@ DEV/
 data/
 .idea/
 __pycache__/
+generated_results/

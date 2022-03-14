@@ -1,13 +1,9 @@
-from argparse import ArgumentParser
 from indexer import Indexer
+from utils import parse_arguments
 import time
 
 
-parser = ArgumentParser()
-parser.add_argument("--inverted_index_file", default="inverted_index.pkl")
-parser.add_argument("--doc_id_file", default="doc_id.pkl")
-
-arguments = parser.parse_args()
+arguments = parse_arguments()
 
 def run(args):
     indexer = Indexer()
