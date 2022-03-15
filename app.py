@@ -46,4 +46,4 @@ def search():
     return render_template("search_engine.html", data=data)
 
 
-app.run()
+app.run(use_reloader=False)
