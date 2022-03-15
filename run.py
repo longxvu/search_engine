@@ -1,19 +1,19 @@
 from indexer import Indexer
-from utils import parse_arguments
+from utils import parse_config
 import time
 
-
-arguments = parse_arguments()
-
-def run(args):
+def run():
+    default_config, data_config = parse_config()
     indexer = Indexer()
-    indexer.load_inverted_index(args.inverted_index_file)
-    indexer.load_doc_id_map(args.doc_id_file)
+    indexer.load_indexer_state(data_config["indexer_state_dir"],
+                               default_config["doc_id_file"],
+                               default_config["all_posting_file"],
+                               default_config["term_posting_map_file"])
 
     while True:
         input_query = input("Enter your search query: ")
         start = time.time()
-        results = indexer.retrieve(input_query, top_k=5)
+        results = indexer.retrieve(input_query, top_k=int(default_config["max_result"]))
         end = time.time()
         print(f'Results for "{input_query}":')
         for result in results:
@@ -22,4 +22,4 @@ def run(args):
         print()
 
 if __name__ == "__main__":
-    run(arguments)
+    run()

@@ -1,25 +1,30 @@
 from argparse import ArgumentParser
 from posixpath import join as urljoin
 from bs4 import BeautifulSoup
+import configparser
 import json
 import os
 import re
 
-WEB_DIR = "web/static"
-GENERATED_RESULT_DIR = "generated_results"
 
-def parse_arguments():
+def parse_config(config_file="config/config.ini"):
     parser = ArgumentParser()
-    parser.add_argument("--inverted_index_file", default="inverted_index.pkl")
-    parser.add_argument("--doc_id_file", default="doc_id.pkl")
+    parser.add_argument(
+        "--config", type=str, choices=["ANALYST", "DEV"], default="ANALYST", help="Path to web data"
+    )
     args = parser.parse_args()
 
-    return args
+    config = configparser.ConfigParser()
+    config.read(config_file)
+    default_config = config["DEFAULT"]
+    data_config = config[args.config]
+
+    return default_config, data_config
 
 
-def generate_result_pages(disk_locs, query=None):
+def generate_result_pages(disk_locs, static_dir, generated_result_dir, query=None):
     generated_pages = []
-    result_dir = os.path.join(WEB_DIR, GENERATED_RESULT_DIR)
+    result_dir = os.path.join(static_dir, generated_result_dir)
     os.makedirs(result_dir, exist_ok=True)
 
     for idx, disk_loc in enumerate(disk_locs):
@@ -35,7 +40,7 @@ def generate_result_pages(disk_locs, query=None):
         with open(path, "w", encoding="utf8") as f:
             f.write(content)
 
-        generated_pages.append(urljoin(GENERATED_RESULT_DIR, file_name))
+        generated_pages.append(urljoin(generated_result_dir, file_name))
 
     return generated_pages
 
@@ -44,11 +49,13 @@ def highlight_html(html_str, query):
     soup = BeautifulSoup(html_str, "html.parser")
     query = query.split()
     query = list(set(query))
-    patterns = [re.compile(word, flags=re.IGNORECASE) for word in query]
+
+    # Pattern for complete match for word, not partial match
+    patterns = [re.compile(f"(^|[^a-zA-Z\d]+|\s+)({word})($|[^a-zA-Z\d]+|\s+)", flags=re.IGNORECASE) for word in query]
 
     for pattern in patterns:
         for tag in soup.find_all(text=pattern):
-            highlighted = re.sub(pattern, "<mark>\g<0></mark>", tag)
+            highlighted = re.sub(pattern, "\g<1><mark>\g<2></mark>\g<3>", tag)
             tag.replace_with(BeautifulSoup(highlighted, "html.parser"))
 
     return str(soup)

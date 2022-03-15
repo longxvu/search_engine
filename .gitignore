@@ -7,3 +7,5 @@ data/
 .idea/
 __pycache__/
 generated_results/
+tmp/
+indexer_state/

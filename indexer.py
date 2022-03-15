@@ -1,6 +1,5 @@
 import nltk
 from nltk.stem.snowball import EnglishStemmer
-from argparse import ArgumentParser
 import pickle
 import os
 from bs4 import BeautifulSoup
@@ -8,6 +7,9 @@ from tqdm import tqdm
 import json
 from typing import List
 import math
+from posting import Posting
+import shutil
+from utils import parse_config
 
 
 class Indexer:
@@ -23,14 +25,24 @@ class Indexer:
         self.doc_id_url_map = {}
         self.doc_id_disk_loc = {}
 
+        # Map from term to its location in final posting file
+        self.term_posting_map = {}
+
+        # Map from term to its file, used for partial index
+        self.__term_file_partial_map = {}
+        self.__current_partial_index_file_id = 0
+
+        # all term posting location
+        self.term_posting_path = None
+
         # Map between terms and its posting.
-        # Posting is currently a tuple (doc_id, term_freq)
+        # Posting is currently
         self.inverted_index = {}
 
         self.__current_id = 0
+        self.__current_approximate_size = 0
 
-    # If all URL are distinct we don't even need url_doc_id_map. Leaving it here for now
-    def index_document(self, document, url, disk_location):
+    def index_document(self, document, url, disk_location, tmp_dir, partial_max_size):
         # Process docID mapping
         doc_id = self.__current_id
         # Doc ID mapping
@@ -38,24 +50,92 @@ class Indexer:
         self.doc_id_disk_loc[doc_id] = disk_location
         self.__current_id += 1
 
+        # posting for this doc
+        doc_posting_dict = {}
+
+        token_pos = 0
         for token in self.tokenizer(document):
             token = self.process_token(token)
             if not token:
                 continue
-            if token not in self.inverted_index:
-                self.inverted_index[token] = []
-            # If current term is not calculated before -> add to list
-            # self.inverted_index[token][-1] is last doc id for current term
-            if (
-                len(self.inverted_index[token]) == 0
-                or self.inverted_index[token][-1][0] != doc_id
-            ):
-                self.inverted_index[token].append((doc_id, 1))
-            else:
-                self.inverted_index[token][-1] = (
-                    doc_id,
-                    self.inverted_index[token][-1][1] + 1,
-                )
+
+            if token not in doc_posting_dict:
+                doc_posting_dict[token] = Posting()
+
+            doc_posting_dict[token].doc_id = doc_id
+            doc_posting_dict[token].update_position_list(token_pos)
+            token_pos += 1
+
+        self.update_inverted_index(doc_posting_dict, tmp_dir, partial_max_size)
+
+        # If current term is not calculated before -> add to list
+        # self.inverted_index[token][-1] is last doc id for current term
+        # if (
+        #     len(self.inverted_index[token]) == 0
+        #     or self.inverted_index[token][-1][0] != doc_id
+        # ):
+        #     self.inverted_index[token].append((doc_id, 1))
+        # else:
+        #     self.inverted_index[token][-1] = (doc_id, self.inverted_index[token][-1][1] + 1)
+
+    # update posting for current document into list of inverted_index posting
+    # guarantee posting is sorted
+    def update_inverted_index(self, doc_posting, tmp_dir, partial_max_size):
+        for term, posting in doc_posting.items():
+            if term not in self.inverted_index:
+                self.inverted_index[term] = []
+            self.inverted_index[term].append(posting)
+            self.__current_approximate_size += posting.get_approximate_size()
+
+        if self.__current_approximate_size > partial_max_size:
+            self.save_partial_index(tmp_dir)
+
+    def save_partial_index(self, temp_dir):
+        if len(self.inverted_index) == 0:
+            return
+        os.makedirs(temp_dir, exist_ok=True)
+        tmp_partial_path = os.path.join(temp_dir, f"partial_tmp_{self.__current_partial_index_file_id:06}")
+        with open(tmp_partial_path, "w") as f:
+            for term, postings in self.inverted_index.items():
+                posting_start = f.tell()
+                for posting in postings:
+                    f.write(str(posting) + "\n")
+                posting_length = f.tell() - posting_start
+                if term not in self.__term_file_partial_map:
+                    self.__term_file_partial_map[term] = []
+
+                self.__term_file_partial_map[term].append((self.__current_partial_index_file_id,
+                                                           posting_start,
+                                                           posting_length))
+        self.__current_partial_index_file_id += 1
+        self.inverted_index = {}                # Reset inverted index
+        self.__current_approximate_size = 0     # Reset processing size
+
+    # Merge partial index
+    def merge_and_write_partial_posting(self, path_to_dump, tmp_dir):
+        # Writing any posting left in inverted index
+        self.save_partial_index(tmp_dir)
+
+        tqdm.write("Merging partial index")
+        # Open final posting file to write
+        with open(path_to_dump, "w") as f_out:
+            for term, postings in tqdm(self.__term_file_partial_map.items()):
+                final_term_posting_list = []
+                # Get partial posting from multiple files
+                for file_idx, posting_start, posting_length in postings:
+                    partial_file_path = os.path.join(tmp_dir, f"partial_tmp_{file_idx:06}")
+                    # f.seek problems with new line on Windows, so we have to read it in binary mode and decode the str
+                    with open(partial_file_path, "rb") as f_in:
+                        f_in.seek(posting_start)
+                        content = f_in.read(posting_length)
+                        final_term_posting_list.extend(parse_multiple_posting(content.decode("utf-8")))
+
+                 # Write to final file. Mapping term to its posting position in final merged file
+                posting_start = f_out.tell()
+                for posting in final_term_posting_list:
+                    f_out.write(str(posting) + "\n")
+                posting_length = f_out.tell() - posting_start
+                self.term_posting_map[term] = (posting_start, posting_length)
 
     # For consistency between inverted index processing and query processing
     def process_token(self, token: str):
@@ -82,35 +162,35 @@ class Indexer:
         doc_id_lst = []
         term_doc_id_lst = []
         for token in processed_query:
-            # TODO: What if token is not in our index?
             # term_doc_id_lst.append([item[0] for item in self.inverted_index[token]])
-            term_doc_id_lst.append(self.inverted_index[token])
+            # print(self.load_posting_from_disk(token))
+            # term_doc_id_lst.append(self.inverted_index[token])
+            posting_found = self.load_posting_from_disk(token)
+            if posting_found:
+                term_doc_id_lst.append(posting_found)
 
-        # If memory is an issue can move the whole part below to process in the for loop above
-        # sort query based on length
+        # No results found for given query
+        if len(term_doc_id_lst) == 0:
+            return []
+        # sort query based on length of its posting list
         term_doc_id_lst = sorted(term_doc_id_lst, key=lambda x: len(x))
+        print(term_doc_id_lst)
         pointer_lst = [0 for _ in range(len(term_doc_id_lst))]  # list for skip pointer
         N = len(self.doc_id_url_map)
         # Process term with the lowest amount of doc id
-        for current_doc_id, term_freq in term_doc_id_lst[0]:
+        for posting in term_doc_id_lst[0]:
+            current_doc_id = posting.doc_id
             same_doc_id = True
+
             for term_idx in range(1, len(term_doc_id_lst)):
                 # Two condition: Pointer to doc doesn't go out of bound, and other doc id < current doc id
                 # Also setting this to -1 in case the first condition fails
                 other_doc_id = -1
-                while (
-                    pointer_lst[term_idx] < len(term_doc_id_lst[term_idx])
-                    and (
-                        other_doc_id := term_doc_id_lst[term_idx][
-                            pointer_lst[term_idx]
-                        ][0]
-                    )
-                    < current_doc_id
-                ):
+                while (pointer_lst[term_idx] < len(term_doc_id_lst[term_idx])
+                    and (other_doc_id := term_doc_id_lst[term_idx][pointer_lst[term_idx]].doc_id) < current_doc_id):
                     pointer_lst[term_idx] += 1
-                if (
-                    other_doc_id != current_doc_id
-                ):  # If other term doesn't include the current doc id we can skip this doc
+                # If other term doesn't include the current doc id we can skip this doc
+                if other_doc_id != current_doc_id:
                     same_doc_id = False
                     break
             if same_doc_id:
@@ -118,7 +198,7 @@ class Indexer:
                 tfidf = 0
                 for token_idx in range(len(term_doc_id_lst)):
                     token_tf = 1 + math.log10(
-                        term_doc_id_lst[token_idx][pointer_lst[token_idx]][1]
+                        term_doc_id_lst[token_idx][pointer_lst[token_idx]].term_freq
                     )
                     token_idf = math.log10(N / len(term_doc_id_lst[token_idx]))
                     tfidf += token_tf * token_idf
@@ -139,9 +219,40 @@ class Indexer:
         disk_loc_results = [self.doc_id_disk_loc[doc_id] for doc_id in doc_ids]
         return doc_id_results[:top_k], disk_loc_results[:top_k]
 
-    def dump_inverted_index(self, path_to_dump):
+    def dump_indexer_state(self, dir_to_dump, doc_id_file, all_posting_file, term_posting_file, tmp_dir):
+        os.makedirs(dir_to_dump, exist_ok=True)
+
+        print("Saving doc_id map")
+        self.dump_doc_id_map(os.path.join(dir_to_dump, doc_id_file))
+        print("Merging and writing partial posting")
+        self.merge_and_write_partial_posting(os.path.join(dir_to_dump, all_posting_file), tmp_dir)
+        print("Saving term posting map")
+        self.dump_term_posting_map(os.path.join(dir_to_dump, term_posting_file))  # Save this last
+        print(f"Done. Indexer state dumped to: {dir_to_dump}")
+
+
+    def load_indexer_state(self, dir_to_load, doc_id_file, all_posting_file, term_posting_file,):
+        print("Loading doc_id map")
+        self.load_doc_id_map(os.path.join(dir_to_load, doc_id_file))
+        print("Loading term posting map")
+        self.load_term_posting_map(os.path.join(dir_to_load, term_posting_file))
+
+        self.term_posting_path = os.path.join(dir_to_load, all_posting_file)
+
+    def load_posting_from_disk(self, term):
+        if term not in self.term_posting_map:
+            return None
+        posting_start, posting_length = self.term_posting_map[term]
+        with open(self.term_posting_path, "rb") as f:
+            f.seek(posting_start)
+            content = f.read(posting_length)
+        postings = parse_multiple_posting(content.decode("utf-8"))
+        return postings
+
+
+    def dump_term_posting_map(self, path_to_dump):
         with open(path_to_dump, "wb") as f_out:
-            pickle.dump(self.inverted_index, f_out, pickle.HIGHEST_PROTOCOL)
+            pickle.dump(self.term_posting_map, f_out, pickle.HIGHEST_PROTOCOL)
 
     def dump_doc_id_map(self, path_to_dump):
         doc_id_state = {
@@ -151,9 +262,9 @@ class Indexer:
         with open(path_to_dump, "wb") as f_out:
             pickle.dump(doc_id_state, f_out, pickle.HIGHEST_PROTOCOL)
 
-    def load_inverted_index(self, path_to_load):
+    def load_term_posting_map(self, path_to_load):
         with open(path_to_load, "rb") as f_in:
-            self.inverted_index = pickle.load(f_in)
+            self.term_posting_map = pickle.load(f_in)
 
     def load_doc_id_map(self, path_to_load):
         with open(path_to_load, "rb") as f_in:
@@ -162,7 +273,7 @@ class Indexer:
         self.doc_id_disk_loc = doc_id_state["disk_loc"]
 
 
-def create_indexer(data_path, use_stemmer=False):
+def create_indexer(data_path, temp_dir, partial_max_size, use_stemmer=False):
     assert os.path.exists(data_path), "Input path does not exist"
 
     indexer = Indexer(use_stemmer)  # For now let's not use stemmer
@@ -178,21 +289,35 @@ def create_indexer(data_path, use_stemmer=False):
 
             soup = BeautifulSoup(content["content"], "lxml")
             # TODO: Right now all text have equal weight. Need to change importance for title, h1, h2, etc.
-            indexer.index_document(soup.text, content["url"], os.path.abspath(file_path))
+            indexer.index_document(soup.text, content["url"], os.path.abspath(file_path), temp_dir, partial_max_size)
 
     return indexer
 
 
-if __name__ == "__main__":
-    parser = ArgumentParser()
-    parser.add_argument(
-        "--data", type=str, default="data/ANALYST", help="Path to web data"
-    )
-    args = parser.parse_args()
+def parse_multiple_posting(posting_str: str):
+    result = []
+    posting_str = posting_str.splitlines()
+    for i in range(0, len(posting_str), 2):
+        posting = Posting()
+        posting.parse_from_str(posting_str[i:i + 2])
+        result.append(posting)
+    return result
 
-    index_db = create_indexer(args.data)
+
+if __name__ == "__main__":
+    default_config, data_config = parse_config()
+
+    tmp_dir = default_config["tmp_dir"]
+    # Delete partial index before creating indexer
+    if os.path.exists(tmp_dir):
+        shutil.rmtree(tmp_dir)
+
+    index_db = create_indexer(data_config["data_path"],
+                              tmp_dir,
+                              int(float(data_config["partial_max_size"])))
     # Hardcode name for now
-    print("Saving doc_id map")
-    index_db.dump_doc_id_map("doc_id.pkl")
-    print("Saving inverted index")
-    index_db.dump_inverted_index("inverted_index.pkl")
+    index_db.dump_indexer_state(data_config["indexer_state_dir"],
+                                default_config["doc_id_file"],
+                                default_config["all_posting_file"],
+                                default_config["term_posting_map_file"],
+                                tmp_dir)

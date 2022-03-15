@@ -2,18 +2,21 @@ import flask
 from indexer import Indexer
 import time
 from flask import render_template, request
-from utils import parse_arguments, generate_result_pages
+from utils import parse_config, generate_result_pages
 
+
+default_config, data_config = parse_config()
 app = flask.Flask(__name__,
-                  static_folder="web/static",
-                  template_folder="web/templates")
+                  static_folder=default_config["static_dir"],
+                  template_folder=default_config["template_dir"])
 app.config["DEBUG"] = True
 
-args = parse_arguments()
 # Load indexer
 indexer = Indexer()
-indexer.load_inverted_index(args.inverted_index_file)
-indexer.load_doc_id_map(args.doc_id_file)
+indexer.load_indexer_state(data_config["indexer_state_dir"],
+                           default_config["doc_id_file"],
+                           default_config["all_posting_file"],
+                           default_config["term_posting_map_file"])
 
 
 @app.route("/", methods=["GET"])
@@ -26,10 +29,13 @@ def search():
     query = request.form.get("input")
     print(query)
     start = time.time()
-    url_map, disk_locs = indexer.retrieve(query, top_k=5)
+    url_map, disk_locs = indexer.retrieve(query, top_k=int(default_config["max_result"]))
     ts = f"Retrieval took {(time.time() - start):.3f}s"
 
-    generated_results = generate_result_pages(disk_locs, query)
+    generated_results = generate_result_pages(disk_locs,
+                                              default_config["static_dir"],
+                                              default_config["generated_results_dir"],
+                                              query)
     print(generated_results)
     data = {
         "results": list(zip(url_map, generated_results)),
