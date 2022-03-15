@@ -10,6 +10,7 @@ import math
 from posting import Posting
 import shutil
 from utils import parse_config
+from urllib.parse import urldefrag
 
 
 class Indexer:
@@ -32,6 +33,9 @@ class Indexer:
         self.__term_file_partial_map = {}
         self.__current_partial_index_file_id = 0
 
+        # Set of discovered URL, maybe useful for duplication, now contains URL without fragment
+        self.__discovered_url = set()
+
         # all term posting location
         self.term_posting_path = None
 
@@ -42,11 +46,17 @@ class Indexer:
         self.__current_id = 0
         self.__current_approximate_size = 0
 
-    def index_document(self, document, url, disk_location, tmp_dir, partial_max_size):
+    def index_document(self, document, url, disk_location, temp_dir, partial_max_size):
+        # Defragment as soft duplication detection
+        defragmented_url, _ = urldefrag(url)
+        if defragmented_url in self.__discovered_url:  # skip if already exists
+            return
+        self.__discovered_url.add(defragmented_url)
+
         # Process docID mapping
         doc_id = self.__current_id
         # Doc ID mapping
-        self.doc_id_url_map[doc_id] = url
+        self.doc_id_url_map[doc_id] = defragmented_url
         self.doc_id_disk_loc[doc_id] = disk_location
         self.__current_id += 1
 
@@ -66,21 +76,11 @@ class Indexer:
             doc_posting_dict[token].update_position_list(token_pos)
             token_pos += 1
 
-        self.update_inverted_index(doc_posting_dict, tmp_dir, partial_max_size)
-
-        # If current term is not calculated before -> add to list
-        # self.inverted_index[token][-1] is last doc id for current term
-        # if (
-        #     len(self.inverted_index[token]) == 0
-        #     or self.inverted_index[token][-1][0] != doc_id
-        # ):
-        #     self.inverted_index[token].append((doc_id, 1))
-        # else:
-        #     self.inverted_index[token][-1] = (doc_id, self.inverted_index[token][-1][1] + 1)
+        self.update_inverted_index(doc_posting_dict, temp_dir, partial_max_size)
 
     # update posting for current document into list of inverted_index posting
     # guarantee posting is sorted
-    def update_inverted_index(self, doc_posting, tmp_dir, partial_max_size):
+    def update_inverted_index(self, doc_posting, temp_dir, partial_max_size):
         for term, posting in doc_posting.items():
             if term not in self.inverted_index:
                 self.inverted_index[term] = []
@@ -88,7 +88,7 @@ class Indexer:
             self.__current_approximate_size += posting.get_approximate_size()
 
         if self.__current_approximate_size > partial_max_size:
-            self.save_partial_index(tmp_dir)
+            self.save_partial_index(temp_dir)
 
     def save_partial_index(self, temp_dir):
         if len(self.inverted_index) == 0:
