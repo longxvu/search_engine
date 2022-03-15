@@ -8,7 +8,8 @@ def run():
     indexer.load_indexer_state(data_config["indexer_state_dir"],
                                default_config["doc_id_file"],
                                default_config["all_posting_file"],
-                               default_config["term_posting_map_file"])
+                               default_config["term_posting_map_file"],
+                               default_config["bigram_file"])
 
     while True:
         input_query = input("Enter your search query: ")
