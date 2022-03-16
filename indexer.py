@@ -150,8 +150,11 @@ class Indexer:
                     with open(partial_file_path, "rb") as f_in:
                         f_in.seek(posting_start)
                         content = f_in.read(posting_length)
-                        final_term_posting_list.extend(parse_multiple_posting(content.decode("utf-8"),
-                                                                              parse_position=True))
+                        content_lst = []
+                        content = content.decode("utf-8").splitlines()
+                        for i in range(0, len(content), 2):
+                            content_lst.append("\n".join([content[i], content[i+1]]))
+                        final_term_posting_list.extend(parse_multiple_posting(content_lst, parse_position=True))
 
                  # Write to final file. Mapping term to its posting position in final merged file
                 posting_pos_lst = []
@@ -203,7 +206,12 @@ class Indexer:
                     with open(partial_file_path, "rb") as f_in:
                         f_in.seek(posting_start)
                         content = f_in.read(posting_length)
-                        final_term_posting_list.extend(parse_multiple_posting(content.decode("utf-8")))
+
+                        content_lst = []
+                        content = content.decode("utf-8").splitlines()
+                        for i in range(0, len(content), 2):
+                            content_lst.append("\n".join([content[i], content[i + 1]]))
+                        final_term_posting_list.extend(parse_multiple_posting(content_lst, parse_position=True))
 
                  # Write to final file. Mapping term to its posting position in final merged file
                 posting_start = f_out.tell()
@@ -349,7 +357,7 @@ class Indexer:
         print(f"Done. Indexer state dumped to: {dir_to_dump}")
 
 
-    def load_indexer_state(self, dir_to_load, doc_id_file, all_posting_file, term_posting_file, bigram_file,bigram_partial_file,bigram_partial_file_map,):
+    def load_indexer_state(self, dir_to_load, doc_id_file, all_posting_file, term_posting_file, bigram_file, bigram_partial_file,bigram_partial_file_map,):
         print("Loading doc_id map")
         self.__load_doc_id_map(os.path.join(dir_to_load, doc_id_file))
         print("Loading term posting map")
@@ -395,7 +403,14 @@ class Indexer:
             f.seek(posting_start)
             content = f.read(posting_length)
             mid = time.time()
-        postings = parse_multiple_posting(content.decode("utf-8"))
+
+        # fix for new parse posting format
+        content_lst = []
+        content = content.decode("utf-8").splitlines()
+        for i in range(0, len(content), 2):
+            content_lst.append("\n".join([content[i], content[i + 1]]))
+
+        postings = parse_multiple_posting(content_lst, parse_position=True)
         end = time.time()
         print(f"Reading took {mid - start:.3f}s")
         print(f"Parsing took {end - mid:.3f}s")
