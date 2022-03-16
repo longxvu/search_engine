@@ -5,7 +5,8 @@ import configparser
 import json
 import os
 import re
-
+import sys   
+sys.setrecursionlimit(10000)
 
 def parse_config(config_file="config/config.ini"):
     parser = ArgumentParser()
@@ -52,7 +53,6 @@ def highlight_html(html_str, query):
 
     # Pattern for complete match for word, not partial match
     patterns = [re.compile(f"(^|[^a-zA-Z\d]+|\s+)({word})($|[^a-zA-Z\d]+|\s+)", flags=re.IGNORECASE) for word in query]
-
     for pattern in patterns:
         for tag in soup.find_all(text=pattern):
             highlighted = re.sub(pattern, "\g<1><mark>\g<2></mark>\g<3>", tag)

@@ -17,7 +17,9 @@ indexer.load_indexer_state(data_config["indexer_state_dir"],
                            default_config["doc_id_file"],
                            default_config["all_posting_file"],
                            default_config["term_posting_map_file"],
-                           default_config["bigram_file"])
+                           default_config["bigram_file"],
+                           default_config["bigram_partial_file"],
+                           default_config["bigram_partial_file_map"],)
 
 
 @app.route("/", methods=["GET"])
@@ -32,12 +34,10 @@ def search():
     start = time.time()
     url_map, disk_locs = indexer.retrieve(query, top_k=int(default_config["max_result"]))
     ts = f"Retrieval took {(time.time() - start):.3f}s"
-
     generated_results = generate_result_pages(disk_locs,
                                               default_config["static_dir"],
                                               default_config["generated_results_dir"],
                                               query)
-    print(generated_results)
     data = {
         "results": list(zip(url_map, generated_results)),
         "ts": ts
