@@ -146,14 +146,20 @@ class Indexer:
                     with open(partial_file_path, "rb") as f_in:
                         f_in.seek(posting_start)
                         content = f_in.read(posting_length)
-                        final_term_posting_list.extend(parse_multiple_posting(content.decode("utf-8")))
+                        final_term_posting_list.extend(parse_multiple_posting(content.decode("utf-8"),
+                                                                              parse_position=True))
 
                  # Write to final file. Mapping term to its posting position in final merged file
-                posting_start = f_out.tell()
+                posting_pos_lst = []
                 for posting in final_term_posting_list:
-                    f_out.write(str(posting) + "\n")
-                posting_length = f_out.tell() - posting_start
-                self.term_posting_map[term] = (posting_start, posting_length)
+                    doc_start = f_out.tell()
+                    f_out.write(posting.posting_string() + "\n")
+                    positions_start = f_out.tell()
+                    f_out.write(posting.positions_string() + "\n")
+                    doc_end = f_out.tell()
+                    posting_pos_lst.append((doc_start, positions_start, doc_end))
+
+                self.term_posting_map[term] = posting_pos_lst
 
     # For consistency between inverted index processing and query processing
     def process_token(self, token: str):
@@ -178,11 +184,16 @@ class Indexer:
     # boolean retrieval model:
     def boolean_retrieval(self, processed_query: List[str]):
         doc_id_score_map = {}
+        posting_map = {}
         term_doc_id_lst = []
         bigram_lst = []
         for token in processed_query:
             start = time.time()
-            posting_found = self.load_posting_from_disk(token)
+            if token not in posting_map:
+                posting_found = self.load_posting_from_disk(token, load_positions=False)
+                posting_map[token] = posting_found
+            else:
+                posting_found = posting_map[token]
             print(f"Retrieving '{token}': {time.time() - start:.3f}s")
             if posting_found:
                 term_doc_id_lst.append(posting_found)
@@ -290,16 +301,24 @@ class Indexer:
         self.term_posting_path = os.path.join(dir_to_load, all_posting_file)
         print("Indexer state loaded")
 
-    def load_posting_from_disk(self, term):
+    def load_posting_from_disk(self, term, load_positions):
         if term not in self.term_posting_map:
             return None
-        posting_start, posting_length = self.term_posting_map[term]
+        posting_pos_list = self.term_posting_map[term]
+        posting_str_lst = []
         start = time.time()
         with open(self.term_posting_path, "rb") as f:
-            f.seek(posting_start)
-            content = f.read(posting_length)
-            mid = time.time()
-        postings = parse_multiple_posting(content.decode("utf-8"))
+            for doc_start, pos_start, doc_end in posting_pos_list:
+                f.seek(doc_start)
+                if load_positions:
+                    read_length = doc_end - doc_start
+                else:
+                    read_length = pos_start - doc_start
+                content = f.read(read_length)
+                posting_str_lst.append(content.decode("utf-8"))
+
+        mid = time.time()
+        postings = parse_multiple_posting(posting_str_lst, load_positions)
         end = time.time()
         print(f"Reading took {mid - start:.3f}s")
         print(f"Parsing took {end - mid:.3f}s")
@@ -343,7 +362,7 @@ def create_indexer(data_path, temp_dir, partial_max_size, use_stemmer=False):
     indexer = Indexer(use_stemmer)  # For now let's not use stemmer
     for directory in tqdm(os.listdir(data_path), desc="Whole dataset progress"):
         for file in tqdm(
-            os.listdir(os.path.join(data_path, directory)),
+            os.listdir(os.path.join(data_path, directory))[:200],
             leave=False,
             desc=f"Processing {directory}",
         ):
@@ -358,12 +377,11 @@ def create_indexer(data_path, temp_dir, partial_max_size, use_stemmer=False):
     return indexer
 
 # TODO: Can introduce max load time here to prevent time parsing common word
-def parse_multiple_posting(posting_str: str):
+def parse_multiple_posting(posting_str_lst: List, parse_position: bool):
     result = []
-    posting_str = posting_str.splitlines()
-    for i in range(0, len(posting_str), 2):
+    for posting_str in posting_str_lst:
         posting = Posting()
-        posting.parse_from_str(posting_str[i:i + 2])
+        posting.parse_from_str(posting_str, parse_position)
         result.append(posting)
     return result
 
