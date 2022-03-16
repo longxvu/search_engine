@@ -11,6 +11,7 @@
     </div>
     <h1>Results:</h1>
     <div>
+        <p>Top 5 results for "{{data.query}}":</p>
         {% for post in data.results %}
 
         <p><a target="_blank" rel="noopener noreferrer" href="{{ url_for('static', filename=post[1]) }}">{{ post[0] }}</a></p>

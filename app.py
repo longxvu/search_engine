@@ -30,7 +30,7 @@ def home():
 @app.route("/search", methods=["POST"])
 def search():
     query = request.form.get("input")
-    print(query)
+    print(f"Query: {query}")
     start = time.time()
     url_map, disk_locs = indexer.retrieve(query, top_k=int(default_config["max_result"]))
     ts = f"Retrieval took {(time.time() - start):.3f}s"
@@ -40,7 +40,8 @@ def search():
                                               query)
     data = {
         "results": list(zip(url_map, generated_results)),
-        "ts": ts
+        "ts": ts,
+        "query": query
     }
     print(data)
     return render_template("search_engine.html", data=data)

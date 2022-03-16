@@ -44,6 +44,9 @@ class Indexer:
         # all term posting location
         self.term_posting_path = None
 
+        # common word list
+        self.common_words = set(nltk.corpus.stopwords.words("english"))
+
         # Map between terms and its posting.
         # Posting is currently
         self.inverted_index = {}
@@ -244,28 +247,29 @@ class Indexer:
     def boolean_retrieval(self, processed_query: List[str]):
         doc_id_score_map = {}
         posting_map = {}
-        term_doc_id_lst = []
         bigram_lst = []
+        token_time_limit = get_token_time_limit(processed_query, self.common_words, 250)
+        print(f"Tokens time limit: {token_time_limit}")
         for token in processed_query:
             start = time.time()
             if token not in posting_map:
-                posting_found = self.load_posting_from_disk(token, load_positions=False)
-                posting_map[token] = posting_found
-            else:
-                posting_found = posting_map[token]
+                posting_found = self.load_posting_from_disk(token, False, token_time_limit[token])
+                if posting_found:
+                    posting_map[token] = posting_found
             print(f"Retrieving '{token}': {time.time() - start:.3f}s")
-            if posting_found:
-                term_doc_id_lst.append(posting_found)
 
         if len(processed_query) >= 2:
             for bigram_token in zip(processed_query[:-1], processed_query[1:]):
                 bigram_lst.append(bigram_token)
         # No results found for given query
-        if len(term_doc_id_lst) == 0:
+        if len(posting_map) == 0:
             return []
-        # sort query based on length of its posting list
         print(bigram_lst)
-        term_doc_id_lst = sorted(term_doc_id_lst, key=lambda x: len(x))
+
+        # sort query based on length of its posting list
+        posting_map = {k: v for k, v in sorted(posting_map.items(), key=lambda item: len(item[1]))}
+        sorted_term = list(posting_map.keys())
+        term_doc_id_lst = list(posting_map.values())
         pointer_lst = [0 for _ in range(len(term_doc_id_lst))]  # list for skip pointer
         N = len(self.doc_id_url_map)
         # Process term with the lowest amount of doc id
@@ -288,9 +292,9 @@ class Indexer:
                 # term frequency, inverse document frequency
                 tfidf = 0
                 for token_idx in range(len(term_doc_id_lst)):
-                    token_tf = 1 + math.log10(
-                        term_doc_id_lst[token_idx][pointer_lst[token_idx]].term_freq
-                    )
+                    token_tf = 1 + math.log10(term_doc_id_lst[token_idx][pointer_lst[token_idx]].term_freq)
+                    # if sorted_term[token_idx] in self.common_words:
+                    #     token_tf = 0.05 * token_tf
                     token_idf = math.log10(N / len(term_doc_id_lst[token_idx]))
                     tfidf += token_tf * token_idf
                 # for term_idx, doc_ptr in enumerate(pointer_lst):
@@ -304,6 +308,10 @@ class Indexer:
         # computing tf-idf score for bigram for the given doc id list
         if len(bigram_lst) > 0:
             for bigram_token in bigram_lst:
+                multiplier = 1.0
+                for token in bigram_token:
+                    if token in self.common_words:
+                        multiplier *= 1/2
                 posting_found = self.load_bigram_posting_from_disk(bigram_token)
                 # posting_found = self.inverted_bigram_index[bigram_token]
                 if posting_found:
@@ -316,12 +324,12 @@ class Indexer:
                     for posting in doc_containing_bigram:
                         bigram_tf = 1 + math.log10(posting.term_freq)
                         bigram_idf = math.log10(N / len(posting_found))
-                        bigram_tfidf = bigram_tf * bigram_idf
+                        bigram_tfidf = multiplier * bigram_tf * bigram_idf
                         doc_id_score_map[posting.doc_id][1] = bigram_tfidf
 
         # compute final score for each doc id
-        unigram_weight = 0.3
-        bigram_weight = 0.7
+        unigram_weight = 0.4
+        bigram_weight = 0.6
         doc_id_score_map = {doc_id: unigram_weight * scores[0] + bigram_weight * scores[1]
                             for doc_id, scores in doc_id_score_map.items()}
         doc_id_results = [k for k, v in sorted(doc_id_score_map.items(), key=lambda x: x[1], reverse=True)]
@@ -330,7 +338,7 @@ class Indexer:
 
     def retrieve(self, query, top_k=5):
         processed_query = self.process_query(query)
-        print(processed_query)
+        print(f"Processed query: {processed_query}")
         doc_ids = self.boolean_retrieval(processed_query)
         # results = sorted(results, key=lambda x: x[1], reverse=True)
         doc_id_results = [self.doc_id_url_map[doc_id] for doc_id in doc_ids]
@@ -372,7 +380,8 @@ class Indexer:
         self.bigram_term_posting_path = os.path.join(dir_to_load, bigram_partial_file)
         print("Indexer state loaded")
 
-    def load_posting_from_disk(self, term, load_positions):
+    # Load posting from disk, time limit in ms
+    def load_posting_from_disk(self, term, load_positions, parse_time_limit):
         if term not in self.term_posting_map:
             return None
         posting_pos_list = self.term_posting_map[term]
@@ -389,11 +398,12 @@ class Indexer:
                 posting_str_lst.append(content.decode("utf-8"))
 
         mid = time.time()
-        postings = parse_multiple_posting(posting_str_lst, load_positions)
+        postings = parse_multiple_posting(posting_str_lst, load_positions, parse_time_limit)
         end = time.time()
         print(f"Reading took {mid - start:.3f}s")
         print(f"Parsing took {end - mid:.3f}s")
         return postings
+
     def load_bigram_posting_from_disk(self, term):
         if term not in self.bigram_term_posting_map:
             return None
@@ -415,8 +425,6 @@ class Indexer:
         print(f"Reading took {mid - start:.3f}s")
         print(f"Parsing took {end - mid:.3f}s")
         return postings
-
-
 
     def __dump_term_posting_map(self, path_to_dump):
         with open(path_to_dump, "wb") as f_out:
@@ -461,7 +469,7 @@ def create_indexer(data_path, temp_dir, partial_max_size, use_stemmer=False):
     indexer = Indexer(use_stemmer)  # For now let's not use stemmer
     for directory in tqdm(os.listdir(data_path), desc="Whole dataset progress"):
         for file in tqdm(
-            os.listdir(os.path.join(data_path, directory))[:200],
+            os.listdir(os.path.join(data_path, directory)),
             leave=False,
             desc=f"Processing {directory}",
         ):
@@ -475,14 +483,47 @@ def create_indexer(data_path, temp_dir, partial_max_size, use_stemmer=False):
 
     return indexer
 
-# TODO: Can introduce max load time here to prevent time parsing common word
-def parse_multiple_posting(posting_str_lst: List, parse_position: bool):
+# Time limit in ms
+def parse_multiple_posting(posting_str_lst: List, parse_position: bool, parse_time_limit=None):
     result = []
+    if parse_time_limit:
+        parse_time_limit = parse_time_limit / 1000  # Normalize for milliseconds
+    time_start = time.time()
     for posting_str in posting_str_lst:
+        if parse_time_limit:  # Stop loop if parsing already exceeds time limit
+            current_time = time.time() - time_start
+            # print(current_time)
+            if current_time > parse_time_limit:
+                break
         posting = Posting()
         posting.parse_from_str(posting_str, parse_position)
         result.append(posting)
     return result
+
+
+# use_full_time is for using full time if one of the set is absent
+def get_token_time_limit(tokens, common_words, max_time_limit, common_token_weight=0.2, use_full_time=False):
+    token_set = set(tokens)
+    common_token = set([token for token in token_set if token in common_words])
+    for token in common_token:
+        token_set.remove(token)
+
+    common_total_time = common_token_weight * max_time_limit
+    non_common_total_time = max_time_limit - common_total_time
+    token_time_limit_dict = {}
+
+    for token in common_token:
+        token_time_limit_dict[token] = common_total_time / len(common_token)
+        if use_full_time:
+            if len(token_set) == 0:
+                token_time_limit_dict[token] += non_common_total_time / len(common_token)
+    for token in token_set:
+        token_time_limit_dict[token] = non_common_total_time / len(token_set)
+        if len(common_token) == 0:
+            token_time_limit_dict[token] += common_total_time / len(token_set)
+
+    return token_time_limit_dict
+
 
 
 if __name__ == "__main__":
