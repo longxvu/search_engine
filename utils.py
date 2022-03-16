@@ -5,10 +5,10 @@ import configparser
 import json
 import os
 import re
-import sys   
-import nltk
+import sys
 import hashlib
 import numpy as np
+
 sys.setrecursionlimit(10000)
 
 def parse_config(config_file="config/config.ini"):
@@ -63,7 +63,7 @@ def highlight_html(html_str, query):
 
     return str(soup)
 
-    def find_weights(content):
+def find_weights(content):
     weights = {}
     for token in content:
         if token in weights:
@@ -80,7 +80,7 @@ def compute_similarity(val, another_val, num_bits=64):
     count = 0
     
     for i in range(0,num_bits):
-        if ((( val>> i) & 1) == (( another_val>>i) & 1)):
+        if ((val >> i) & 1) == ((another_val >> i) & 1):
             count += 1
             
     return count/num_bits

@@ -4,3 +4,4 @@ lxml
 tqdm
 flask
 Jinja2
+numpy
