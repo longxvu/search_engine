@@ -1,5 +1,4 @@
 import re
-
 import nltk
 from nltk.stem.snowball import EnglishStemmer
 import pickle
@@ -12,6 +11,10 @@ import math
 from posting import Posting
 import shutil
 from utils import parse_config
+from utils import find_weights
+from utils import hash_function
+from utils import compute_similarity
+from utils import gen_hash
 from urllib.parse import urldefrag
 import time
 
@@ -57,12 +60,28 @@ class Indexer:
 
         self.__non_alpha_numeric_pattern = re.compile("^[^a-zA-Z\d]+$")
 
+        self.__simhash_list = []
+
     def index_document(self, document, url, disk_location, temp_dir, partial_max_size):
         # Defragment as soft duplication detection
         defragmented_url, _ = urldefrag(url)
         if defragmented_url in self.__discovered_url:  # skip if already exists
             return
         self.__discovered_url.add(defragmented_url)
+
+        # posting for this doc
+        doc_posting_dict = {}
+
+        token_pos = 0
+        token_list = [self.process_token(token) for token in self.tokenizer(document)]
+        token_list = [token for token in token_list if token is not None]
+        token_weights = find_weights(token_list)
+        simhash_val = gen_hash(token_weights)
+        if len(self.__simhash_list) > 0:
+            for another_val in self.__simhash_list:
+                if compute_similarity(simhash_val, another_val) >= 0.98:
+                    return
+        self.__simhash_list.append(simhash_val)
 
         # Process docID mapping
         doc_id = self.__current_id
@@ -71,12 +90,6 @@ class Indexer:
         self.doc_id_disk_loc[doc_id] = disk_location
         self.__current_id += 1
 
-        # posting for this doc
-        doc_posting_dict = {}
-
-        token_pos = 0
-        token_list = [self.process_token(token) for token in self.tokenizer(document)]
-        token_list = [token for token in token_list if token is not None]
         for token in token_list:
             if token not in doc_posting_dict:
                 doc_posting_dict[token] = Posting()
