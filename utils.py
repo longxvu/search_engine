@@ -6,6 +6,9 @@ import json
 import os
 import re
 import sys   
+import nltk
+import hashlib
+import numpy as np
 sys.setrecursionlimit(10000)
 
 def parse_config(config_file="config/config.ini"):
@@ -59,3 +62,47 @@ def highlight_html(html_str, query):
             tag.replace_with(BeautifulSoup(highlighted, "html.parser"))
 
     return str(soup)
+
+    def find_weights(content):
+    weights = {}
+    for token in content:
+        if token in weights:
+            weights[token] += 1
+        else:
+            weights[token] = 1
+            
+    return weights
+
+def hash_function(token, num_bits=64):
+    return hashlib.md5(token.encode('utf-8')).digest()[int(-num_bits/8):]
+
+def compute_similarity(val, another_val, num_bits=64):    
+    count = 0
+    
+    for i in range(0,num_bits):
+        if ((( val>> i) & 1) == (( another_val>>i) & 1)):
+            count += 1
+            
+    return count/num_bits
+
+def gen_hash(weights, num_bits=64):
+    hash_values = []
+    v = [0] * num_bits
+    weights = weights.items()
+    for token,weight in weights:
+        h = hash_function(token)
+        bitarray = np.unpackbits(np.frombuffer(h, dtype=np.uint8))
+        for i in range(num_bits):
+            if bitarray[i] == 1:
+                v[i] += weight
+            else:
+                v[i] -= weight
+                
+    for i in range(num_bits):
+        if v[i] > 0:
+            v[i] = 1
+        else:
+            v[i] = 0
+
+    int_hash_val = int.from_bytes(np.packbits(v).tobytes(), 'big')
+    return int_hash_val
