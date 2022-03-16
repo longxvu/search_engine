@@ -31,9 +31,11 @@ class Indexer:
 
         # Map from term to its location in final posting file
         self.term_posting_map = {}
+        self.bigram_term_posting_map = {}
 
         # Map from term to its file, used for partial index
         self.__term_file_partial_map = {}
+        self.__bigram_term_file_partial_map = {}
         self.__current_partial_index_file_id = 0
 
         # Set of discovered URL, maybe useful for duplication, now contains URL without fragment
@@ -83,6 +85,7 @@ class Indexer:
         self.update_inverted_index(doc_posting_dict, temp_dir, partial_max_size)
 
         # bigram construction
+        token_pos = 0
         for bigram_token in zip(token_list[:-1], token_list[1:]):
             bigram_posting = Posting()
             bigram_posting.doc_id = doc_id
@@ -92,8 +95,9 @@ class Indexer:
                 if self.inverted_bigram_index[bigram_token][-1].doc_id == doc_id:
                     bigram_posting = self.inverted_bigram_index[bigram_token].pop()  # Same document just retrieved last post
 
-            bigram_posting.term_freq += 1
+            bigram_posting.update_position_list(token_pos)
             self.inverted_bigram_index[bigram_token].append(bigram_posting)
+            token_pos += 1
 
 
     # update posting for current document into list of inverted_index posting
@@ -154,6 +158,53 @@ class Indexer:
                     f_out.write(str(posting) + "\n")
                 posting_length = f_out.tell() - posting_start
                 self.term_posting_map[term] = (posting_start, posting_length)
+
+    def save_bigram_partial_index(self, temp_dir):
+        if len(self.inverted_bigram_index) == 0:
+            return
+        os.makedirs(temp_dir, exist_ok=True)
+        tmp_partial_path = os.path.join(temp_dir, f"bi_partial_tmp_{self.__current_partial_index_file_id:06}")
+        with open(tmp_partial_path, "w") as f:
+            for term, postings in self.inverted_bigram_index.items():
+                posting_start = f.tell()
+                for posting in postings:
+                    f.write(str(posting) + "\n")
+                posting_length = f.tell() - posting_start
+                if term not in self.__bigram_term_file_partial_map:
+                    self.__bigram_term_file_partial_map[term] = []
+
+                self.__bigram_term_file_partial_map[term].append((self.__current_partial_index_file_id,
+                                                           posting_start,
+                                                           posting_length))
+        self.__current_partial_index_file_id += 1
+        self.inverted_bigram_index = {}                # Reset inverted index
+        self.__current_approximate_size = 0     # Reset processing size
+
+    # Merge partial index
+    def merge_and_write_bigram_partial_posting(self, path_to_dump, temp_dir):
+        # Writing any posting left in inverted index
+        self.save_bigram_partial_index(temp_dir)
+
+        tqdm.write("Merging partial index")
+        # Open final posting file to write
+        with open(path_to_dump, "w") as f_out:
+            for term, postings in tqdm(self.__bigram_term_file_partial_map.items()):
+                final_term_posting_list = []
+                # Get partial posting from multiple files
+                for file_idx, posting_start, posting_length in postings:
+                    partial_file_path = os.path.join(temp_dir, f"bi_partial_tmp_{file_idx:06}")
+                    # f.seek problems with new line on Windows, so we have to read it in binary mode and decode the str
+                    with open(partial_file_path, "rb") as f_in:
+                        f_in.seek(posting_start)
+                        content = f_in.read(posting_length)
+                        final_term_posting_list.extend(parse_multiple_posting(content.decode("utf-8")))
+
+                 # Write to final file. Mapping term to its posting position in final merged file
+                posting_start = f_out.tell()
+                for posting in final_term_posting_list:
+                    f_out.write(str(posting) + "\n")
+                posting_length = f_out.tell() - posting_start
+                self.bigram_term_posting_map[term] = (posting_start, posting_length)
 
     # For consistency between inverted index processing and query processing
     def process_token(self, token: str):
@@ -234,16 +285,18 @@ class Indexer:
         # computing tf-idf score for bigram for the given doc id list
         if len(bigram_lst) > 0:
             for bigram_token in bigram_lst:
-                if bigram_token in self.inverted_bigram_index:
+                posting_found = self.load_bigram_posting_from_disk(bigram_token)
+                # posting_found = self.inverted_bigram_index[bigram_token]
+                if posting_found:
                     doc_containing_bigram = []
-                    for posting in self.inverted_bigram_index[bigram_token]:
+                    for posting in posting_found:
                         if posting.doc_id in doc_id_score_map:
                             doc_containing_bigram.append(posting)
                     # doc_containing_bigram = [posting for posting in self.inverted_bigram_index[bigram_token]
                     #                          if posting.doc_id in doc_id_score_map]
                     for posting in doc_containing_bigram:
                         bigram_tf = 1 + math.log10(posting.term_freq)
-                        bigram_idf = math.log10(N / len(self.inverted_bigram_index[bigram_token]))
+                        bigram_idf = math.log10(N / len(posting_found))
                         bigram_tfidf = bigram_tf * bigram_idf
                         doc_id_score_map[posting.doc_id][1] = bigram_tfidf
 
@@ -265,29 +318,39 @@ class Indexer:
         disk_loc_results = [self.doc_id_disk_loc[doc_id] for doc_id in doc_ids]
         return doc_id_results[:top_k], disk_loc_results[:top_k]
 
-    def dump_indexer_state(self, dir_to_dump, doc_id_file, all_posting_file, term_posting_file, bigram_file, temp_dir):
+    def dump_indexer_state(self, dir_to_dump, doc_id_file, all_posting_file, term_posting_file, bigram_file, bigram_partial_file,bigram_partial_file_map,temp_dir):
         os.makedirs(dir_to_dump, exist_ok=True)
 
         print("Saving doc_id map")
         self.__dump_doc_id_map(os.path.join(dir_to_dump, doc_id_file))
         print("Merging and writing partial posting")
         self.merge_and_write_partial_posting(os.path.join(dir_to_dump, all_posting_file), temp_dir)
+
         print("Saving bigram index")
         self.__dump_bigram_index(os.path.join(dir_to_dump, bigram_file))
+        print("Merging and writing bigram partial posting")
+        self.merge_and_write_bigram_partial_posting(os.path.join(dir_to_dump, bigram_partial_file), temp_dir)
+        print("Saving bigram term posting map")
+        self.__dump_bigram_term_posting_map(os.path.join(dir_to_dump, bigram_partial_file_map))
+
         print("Saving term posting map")
         self.__dump_term_posting_map(os.path.join(dir_to_dump, term_posting_file))  # Save this last
         print(f"Done. Indexer state dumped to: {dir_to_dump}")
 
 
-    def load_indexer_state(self, dir_to_load, doc_id_file, all_posting_file, term_posting_file, bigram_file):
+    def load_indexer_state(self, dir_to_load, doc_id_file, all_posting_file, term_posting_file, bigram_file,bigram_partial_file,bigram_partial_file_map,):
         print("Loading doc_id map")
         self.__load_doc_id_map(os.path.join(dir_to_load, doc_id_file))
         print("Loading term posting map")
         self.__load_term_posting_map(os.path.join(dir_to_load, term_posting_file))
-        print("Loading bigram index")
-        self.__load_bigram_index(os.path.join(dir_to_load, bigram_file))
+
+        print("Loading bigram term posting map")
+        self.__load_bigram_term_posting_map(os.path.join(dir_to_load,  bigram_partial_file_map))
+        # print("Loading bigram index")
+        # self.__load_bigram_index(os.path.join(dir_to_load, bigram_file))
 
         self.term_posting_path = os.path.join(dir_to_load, all_posting_file)
+        self.bigram_term_posting_path = os.path.join(dir_to_load, bigram_partial_file)
         print("Indexer state loaded")
 
     def load_posting_from_disk(self, term):
@@ -304,11 +367,29 @@ class Indexer:
         print(f"Reading took {mid - start:.3f}s")
         print(f"Parsing took {end - mid:.3f}s")
         return postings
+    def load_bigram_posting_from_disk(self, term):
+        if term not in self.bigram_term_posting_map:
+            return None
+        posting_start, posting_length = self.bigram_term_posting_map[term]
+        start = time.time()
+        with open(self.bigram_term_posting_path, "rb") as f:
+            f.seek(posting_start)
+            content = f.read(posting_length)
+            mid = time.time()
+        postings = parse_multiple_posting(content.decode("utf-8"))
+        end = time.time()
+        print(f"Reading took {mid - start:.3f}s")
+        print(f"Parsing took {end - mid:.3f}s")
+        return postings
+
 
 
     def __dump_term_posting_map(self, path_to_dump):
         with open(path_to_dump, "wb") as f_out:
             pickle.dump(self.term_posting_map, f_out, pickle.HIGHEST_PROTOCOL)
+    def __dump_bigram_term_posting_map(self, path_to_dump):
+        with open(path_to_dump, "wb") as f_out:
+            pickle.dump(self.bigram_term_posting_map, f_out, pickle.HIGHEST_PROTOCOL)
 
     def __dump_doc_id_map(self, path_to_dump):
         doc_id_state = {
@@ -325,6 +406,9 @@ class Indexer:
     def __load_term_posting_map(self, path_to_load):
         with open(path_to_load, "rb") as f_in:
             self.term_posting_map = pickle.load(f_in)
+    def __load_bigram_term_posting_map(self, path_to_load):
+        with open(path_to_load, "rb") as f_in:
+            self.bigram_term_posting_map = pickle.load(f_in)
 
     def __load_doc_id_map(self, path_to_load):
         with open(path_to_load, "rb") as f_in:
@@ -385,4 +469,6 @@ if __name__ == "__main__":
                                 default_config["all_posting_file"],
                                 default_config["term_posting_map_file"],
                                 default_config["bigram_file"],
+                                default_config["bigram_partial_file"],
+                                default_config["bigram_partial_file_map"],
                                 tmp_dir)
